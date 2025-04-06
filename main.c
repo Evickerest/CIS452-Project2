@@ -1,27 +1,13 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <string.h>
 #include <unistd.h>
 #include <time.h>
 
-
-int NUM_BAKERS; 
-
-
-// Semaphores for resources (shared resources in the kitchen)
-sem_t mixer[2];        
-sem_t pantry;          
-sem_t refrigerator[2]; 
-sem_t bowl[3];           
-sem_t spoon[5];          
-sem_t oven;            
-
-
-// Semaphores for specific ingredients (1 per ingredient)
-sem_t flour, sugar, yeast, baking_soda, salt, cinnamon;
-sem_t egg, milk, butter;
-
+#define MAX_WAIT_TIME 100
 
 // Recipe definitions
 typedef enum {
@@ -32,293 +18,432 @@ typedef enum {
    CINNAMON_ROLLS
 } Recipe;
 
+// Struct to record everything the baker has
+typedef struct Baker {
+	int bakerId;
+	int hasFlour;
+	int hasSugar;
+	int hasYeast;
+	int hasBakingSoda;
+	int hasSalt;
+	int hasCinnamon;
+	int hasEggs;
+	int hasMilk;
+	int hasButter;
+	int gotBowl;
+	int gotSpoon;
+	int gotMixer;
+	int gotOven;
+	int gotPantry;
+	int gotRefrigerator;
+	int gotMixed;
+	int gotCooked;
+	Recipe currentRecipe;
+	char* color;
+} Baker;
 
+// Struct to hold semaphores
+typedef struct Sem {
+	sem_t mixer;
+	sem_t pantry;
+	sem_t refrigerator;
+	sem_t bowl;
+	sem_t spoon;
+	sem_t oven;
+	sem_t flour;
+	sem_t sugar;
+	sem_t yeast;
+	sem_t bakingSoda;
+	sem_t salt;
+	sem_t cinnamon;
+	sem_t eggs;
+	sem_t milk;
+	sem_t butter;
+} Sem;
+
+Sem sem;
 const char *recipe_names[] = {"Cookies", "Pancakes", "Pizza Dough", "Pretzels", "Cinnamon Rolls"};
 
+// Gets a random ANSI color string
+char* getBakerColor() { 
+	int red = rand() % 256;
+	int green = rand() % 256;
+	int blue = rand() % 256;
+	char* buffer = malloc(sizeof(char) * 32);
+	snprintf(buffer, 32, "\033[38;2;%d;%d;%dm", red, green, blue);
+	return buffer;
+}
+
+void giveUpPantry(Baker* baker) {
+	if (baker->hasFlour == 1) sem_post(&sem.flour);
+	if (baker->hasSugar == 1) sem_post(&sem.sugar);
+	if (baker->hasYeast == 1) sem_post(&sem.yeast);
+	if (baker->hasBakingSoda == 1) sem_post(&sem.bakingSoda);
+	if (baker->hasSalt == 1) sem_post(&sem.salt);
+	if (baker->hasCinnamon == 1) sem_post(&sem.cinnamon);
+	baker->hasFlour = 0;
+	baker->hasSugar = 0;
+	baker->hasYeast = 0;
+	baker->hasBakingSoda = 0;
+	baker->hasSalt = 0;
+	baker->hasCinnamon = 0;
+}
+
+void giveUpRefrigerator(Baker* baker) {
+	if (baker->hasEggs == 1) sem_post(&sem.eggs);
+	if (baker->hasMilk == 1) sem_post(&sem.milk);
+	if (baker->hasButter == 1) sem_post(&sem.butter);
+	baker->hasEggs = 0;
+	baker->hasMilk = 0;
+	baker->hasButter = 0;
+}
+
+void giveUpMixing(Baker* baker) {
+	if (baker->gotBowl == 1) sem_post(&sem.bowl);
+	if (baker->gotSpoon == 1) sem_post(&sem.spoon);
+	if (baker->gotMixer == 1) sem_post(&sem.mixer);
+	baker->gotBowl = 0;
+	baker->gotSpoon = 0;
+	baker->gotMixer = 0;
+}
+
+// Releases everything the baker has at the moment
+void giveUp(Baker* baker) {
+	if (baker->hasFlour == 1) sem_post(&sem.flour);
+	if (baker->hasSugar == 1) sem_post(&sem.sugar);
+	if (baker->hasYeast == 1) sem_post(&sem.yeast);
+	if (baker->hasBakingSoda == 1) sem_post(&sem.bakingSoda);
+	if (baker->hasSalt == 1) sem_post(&sem.salt);
+	if (baker->hasCinnamon == 1) sem_post(&sem.cinnamon);
+	if (baker->hasEggs == 1) sem_post(&sem.eggs);
+	if (baker->hasMilk == 1) sem_post(&sem.milk);
+	if (baker->hasButter == 1) sem_post(&sem.butter);
+	if (baker->gotBowl == 1) sem_post(&sem.bowl);
+	if (baker->gotSpoon == 1) sem_post(&sem.spoon);
+	if (baker->gotMixer == 1) sem_post(&sem.mixer);
+	baker->hasFlour = 0;
+	baker->hasSugar = 0;
+	baker->hasYeast = 0;
+	baker->hasBakingSoda = 0;
+	baker->hasSalt = 0;
+	baker->hasCinnamon = 0;
+	baker->hasEggs = 0;
+	baker->hasMilk = 0;
+	baker->hasButter = 0;
+	baker->gotBowl = 0;
+	baker->gotSpoon = 0;
+	baker->gotMixer = 0;
+}
+
+// The function for the baker to acquire everything, mix it, cook it
+void acquireIngredients(
+	Baker* baker,
+	int needsFlour,
+	int needsSugar,
+	int needsYeast,
+	int needsBakingSoda,
+	int needsSalt,
+	int needsCinnamon,
+	int needsEggs,
+	int needsMilk,
+	int needsButter,
+	int needsPantry,
+	int needsRefrigerator
+) {
+	int timer = 0;
+	int finished = 0;
+
+	// Game loop until recipe is finished
+	while (finished == 0) {
+		timer = 0;
+		
+		// If baker needs pantry and we haven't already entered, try semaphore
+		if (needsPantry == 1 && baker->gotPantry == 0 && sem_trywait(&sem.pantry) == 0) {
+			printf("%sBaker %d is entering the pantry.\n", baker->color, baker->bakerId);
+
+			// Keep trying ingredients until we get everything we need
+			while (!((baker->hasFlour     | (needsFlour == 0)) &
+				    (baker->hasSugar      | (needsSugar == 0)) &
+				    (baker->hasYeast      | (needsYeast == 0)) &
+				    (baker->hasBakingSoda | (needsBakingSoda == 0)) &
+				    (baker->hasSalt       | (needsSalt == 0)) &
+				    (baker->hasCinnamon   | (needsCinnamon == 0)))) {
+				timer++;
+
+				if (needsFlour      && !baker->hasFlour      && sem_trywait(&sem.flour) == 0)      {
+					printf("%sBaker %d has gotten flour!\n", baker->color, baker->bakerId);
+					baker->hasFlour = 1;
+				}
+				if (needsSugar      && !baker->hasSugar      && sem_trywait(&sem.sugar) == 0)      {
+					printf("%sBaker %d has gotten sugar!\n", baker->color, baker->bakerId);
+					baker->hasSugar = 1;
+				}
+				if (needsYeast      && !baker->hasYeast      && sem_trywait(&sem.yeast) == 0)      {
+					printf("%sBaker %d has gotten yeast!\n", baker->color, baker->bakerId);
+					baker->hasYeast = 1;
+				}
+				if (needsBakingSoda && !baker->hasBakingSoda && sem_trywait(&sem.bakingSoda) == 0) {
+					printf("%sBaker %d has gotten baking soda!\n", baker->color, baker->bakerId);
+					baker->hasBakingSoda = 1;
+				}
+				if (needsSalt       && !baker->hasSalt       && sem_trywait(&sem.salt) == 0)       {
+					printf("%sBaker %d has gotten salt!\n", baker->color, baker->bakerId);
+					baker->hasSalt = 1;
+				}
+				if (needsCinnamon   && !baker->hasCinnamon   && sem_trywait(&sem.cinnamon) == 0)   {
+					printf("%sBaker %d has gotten cinnamon!\n", baker->color, baker->bakerId);
+					baker->hasCinnamon = 1;
+				}
+
+				// If we expand the max amount of trying time
+				if (timer > MAX_WAIT_TIME) {
+					printf("%sBaker %d is bailing out of the pantry.\n", baker->color, baker->bakerId);
+					giveUpPantry(baker);
+					timer = 0;
+					break;
+				}
+			}
+
+			// If we did not expand max waiting time, i.e., we got everything, exit and release pantry 
+			if (timer <= MAX_WAIT_TIME) {
+				printf("%sBaker %d has gotten everything needed from the pantry!\n", baker->color, baker->bakerId);
+				sem_post(&sem.pantry);
+				baker->gotPantry = 1;
+			}
+		}
+		timer = 0;
+
+		// If we need the refrigerator and we haven't entered it yet, try semaphore
+		if (needsRefrigerator == 1 && baker->gotRefrigerator == 0 && sem_trywait(&sem.refrigerator) == 0) {
+			printf("%sBaker %d is entering the refrigerator.\n", baker->color, baker->bakerId);
+
+			// Loop until we get everything we need
+			while (!((baker->hasEggs  | (needsEggs == 0)) &
+				    (baker->hasMilk   | (needsMilk == 0)) &
+				    (baker->hasButter | (needsButter == 0)))) {
+				timer++;
+				if (needsEggs   && !baker->hasEggs   && sem_trywait(&sem.eggs) == 0)   {
+					printf("%sBaker %d has gotten eggs!\n", baker->color, baker->bakerId);
+					baker->hasEggs = 1;
+				}
+				if (needsMilk   && !baker->hasMilk   && sem_trywait(&sem.milk) == 0)   {
+					printf("%sBaker %d has gotten Milk!\n", baker->color, baker->bakerId);
+					baker->hasMilk = 1;
+				}
+				if (needsButter && !baker->hasButter && sem_trywait(&sem.butter) == 0) {
+					printf("%sBaker %d has gotten butter!\n", baker->color, baker->bakerId);
+					baker->hasButter = 1;
+				}
+
+				if (timer > MAX_WAIT_TIME) {
+					printf("%sBaker %d is bailing out of the refrigerator.\n", baker->color, baker->bakerId);
+					giveUpRefrigerator(baker);
+					timer = 0;
+					break;
+				}
+			}
+
+			if (timer <= MAX_WAIT_TIME) {
+				printf("%sBaker %d has gotten everything needed from the refrigerator!\n", baker->color, baker->bakerId);
+				sem_post(&sem.refrigerator);
+				baker->gotRefrigerator = 1;
+			}
+		}
+		timer = 0;
+		if (baker->gotMixed == 0 && (baker->gotPantry == 1 || needsPantry == 0) && (baker->gotRefrigerator == 1 || needsRefrigerator == 0)) {
+			printf("%sBaker %d has gotten all the ingredients, trying to acquire mixing requirements.\n", baker->color, baker->bakerId);
+
+			while (!(baker->gotBowl  &
+					 baker->gotSpoon &
+					 baker->gotMixer)) {
+				timer++;
+
+				if (!baker->gotBowl  && sem_trywait(&sem.bowl) == 0)  {
+					printf("%sBaker %d has gotten bowl!\n", baker->color, baker->bakerId);
+					baker->gotBowl = 1;
+				}
+				if (!baker->gotSpoon && sem_trywait(&sem.spoon) == 0) {
+					printf("%sBaker %d has gotten spoon!\n", baker->color, baker->bakerId);
+					baker->gotSpoon = 1;
+				}
+				if (!baker->gotMixer && sem_trywait(&sem.mixer) == 0) {
+					printf("%sBaker %d has gotten mixer!\n", baker->color, baker->bakerId);
+					baker->gotMixer = 1;
+				}
+
+				if (timer > MAX_WAIT_TIME) {
+					printf("%sBaker %d is bailing out on acquiring mixing requirments.\n", baker->color, baker->bakerId);
+					giveUpMixing(baker);
+					timer = 0;
+					break;
+				}
+			}
+
+			if (timer <= MAX_WAIT_TIME) {
+				printf("%sBaker %d has gotten all the mixing requirments!\n", baker->color, baker->bakerId);
+				baker->gotMixed = 1;
+			}
+		}
+		timer = 0;
+
+		if (baker->gotMixed == 1) {
+			printf("%sBaker %d is trying to get the oven.\n", baker->color, baker->bakerId);
+
+			while (baker->gotOven == 0) {
+				if(sem_trywait(&sem.oven) == 0) baker->gotOven = 1;
+			}
+
+			sem_post(&sem.oven);
+			printf("%sBaker %d has gotten oven!\n", baker->color, baker->bakerId);
+			printf("%sBaker %d has cooked the recipie.\n", baker->color, baker->bakerId);
+			finished = 1;
+		}
+	}
+};
 
 // Function to acquire resources for the recipes in a consistent order to avoid deadlock
-void acquire_ingredients_for_recipe(Recipe recipe, int baker_id) {
-   // Acquire resources in a consistent order to avoid deadlock
-   switch (recipe) {
-       case COOKIES:
-           sem_wait(&flour);   // Always acquire flour first
-           printf("\033[31mBaker %d acquired Flour for Cookies\033[0m\n", baker_id);
-           sem_wait(&sugar);   // Then acquire sugar
-           printf("\033[31mBaker %d acquired Sugar for Cookies\033[0m\n", baker_id);
-           sem_wait(&milk);    // Then acquire milk
-           printf("\033[31mBaker %d acquired Milk for Cookies\033[0m\n", baker_id);
-           sem_wait(&butter);  // Then acquire butter
-           printf("\033[31mBaker %d acquired Butter for Cookies\033[0m\n", baker_id);
-           break;
-       case PANCAKES:
-           sem_wait(&flour);       // Always acquire flour first
-           printf("\033[32mBaker %d acquired Flour for Pancakes\033[0m\n", baker_id);
-           sem_wait(&sugar);       // Then acquire sugar
-           printf("\033[32mBaker %d acquired Sugar for Pancakes\033[0m\n", baker_id);
-           sem_wait(&baking_soda); // Then acquire baking soda
-           printf("\033[32mBaker %d acquired Baking Soda for Pancakes\033[0m\n", baker_id);
-           sem_wait(&salt);        // Then acquire salt
-           printf("\033[32mBaker %d acquired Salt for Pancakes\033[0m\n", baker_id);
-           sem_wait(&egg);         // Then acquire egg
-           printf("\033[32mBaker %d acquired Egg for Pancakes\033[0m\n", baker_id);
-           sem_wait(&milk);        // Then acquire milk
-           printf("\033[32mBaker %d acquired Milk for Pancakes\033[0m\n", baker_id);
-           sem_wait(&butter);      // Then acquire butter
-           printf("\033[32mBaker %d acquired Butter for Pancakes\033[0m\n", baker_id);
-           break;
-       case PIZZA_DOUGH:
-           sem_wait(&yeast);  // Always acquire yeast first
-           printf("\033[33mBaker %d acquired Yeast for Pizza Dough\033[0m\n", baker_id);
-           sem_wait(&sugar);  // Then acquire sugar
-           printf("\033[33mBaker %d acquired Sugar for Pizza Dough\033[0m\n", baker_id);
-           sem_wait(&salt);   // Then acquire salt
-           printf("\033[33mBaker %d acquired Salt for Pizza Dough\033[0m\n", baker_id);
-           break;
-       case PRETZELS:
-           sem_wait(&flour);      // Always acquire flour first
-           printf("\033[34mBaker %d acquired Flour for Pretzels\033[0m\n", baker_id);
-           sem_wait(&sugar);      // Then acquire sugar
-           printf("\033[34mBaker %d acquired Sugar for Pretzels\033[0m\n", baker_id);
-           sem_wait(&salt);       // Then acquire salt
-           printf("\033[34mBaker %d acquired Salt for Pretzels\033[0m\n", baker_id);
-           sem_wait(&yeast);      // Then acquire yeast
-           printf("\033[34mBaker %d acquired Yeast for Pretzels\033[0m\n", baker_id);
-           sem_wait(&baking_soda); // Then acquire baking soda
-           printf("\033[34mBaker %d acquired Baking Soda for Pretzels\033[0m\n", baker_id);
-           sem_wait(&egg);        // Then acquire egg
-           printf("\033[34mBaker %d acquired Egg for Pretzels\033[0m\n", baker_id);
-           break;
-       case CINNAMON_ROLLS:
-           sem_wait(&flour);      // Always acquire flour first
-           printf("\033[35mBaker %d acquired Flour for Cinnamon Rolls\033[0m\n", baker_id);
-           sem_wait(&sugar);      // Then acquire sugar
-           printf("\033[35mBaker %d acquired Sugar for Cinnamon Rolls\033[0m\n", baker_id);
-           sem_wait(&salt);       // Then acquire salt
-           printf("\033[35mBaker %d acquired Salt for Cinnamon Rolls\033[0m\n", baker_id);
-           sem_wait(&butter);     // Then acquire butter
-           printf("\033[35mBaker %d acquired Butter for Cinnamon Rolls\033[0m\n", baker_id);
-           sem_wait(&egg);        // Then acquire egg
-           printf("\033[35mBaker %d acquired Egg for Cinnamon Rolls\033[0m\n", baker_id);
-           sem_wait(&cinnamon);   // Then acquire cinnamon
-           printf("\033[35mBaker %d acquired Cinnamon for Cinnamon Rolls\033[0m\n", baker_id);
-           break;
-   }
+void cook(Baker* baker, Recipe recipe) {
+	switch(recipe) {
+		case COOKIES:
+			acquireIngredients(baker, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1);
+			break;
+		case PANCAKES:
+			acquireIngredients(baker, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1);
+			break;
+		case PIZZA_DOUGH:
+			acquireIngredients(baker, 0, 1, 1, 0, 1, 0, 0, 0, 0, 1, 0);
+			break;
+		case PRETZELS:
+			acquireIngredients(baker, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 1);
+			break;
+		case CINNAMON_ROLLS:
+			acquireIngredients(baker, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1);
+			break;
+	}
 }
-
-
-void release_ingredients_for_recipe(Recipe recipe) {
-   switch (recipe) {
-       case COOKIES:
-           sem_post(&flour);
-           sem_post(&sugar);
-           sem_post(&milk);
-           sem_post(&butter);
-           break;
-       case PANCAKES:
-           sem_post(&flour);
-           sem_post(&sugar);
-           sem_post(&baking_soda);
-           sem_post(&salt);
-           sem_post(&egg);
-           sem_post(&milk);
-           sem_post(&butter);
-           break;
-       case PIZZA_DOUGH:
-           sem_post(&yeast);
-           sem_post(&sugar);
-           sem_post(&salt);
-           break;
-       case PRETZELS:
-           sem_post(&flour);
-           sem_post(&sugar);
-           sem_post(&salt);
-           sem_post(&yeast);
-           sem_post(&baking_soda);
-           sem_post(&egg);
-           break;
-       case CINNAMON_ROLLS:
-           sem_post(&flour);
-           sem_post(&sugar);
-           sem_post(&salt);
-           sem_post(&butter);
-           sem_post(&egg);
-           sem_post(&cinnamon);
-           break;
-   }
-}
-
-
-// Function to assign a color to each baker
-const char* get_baker_color(int baker_id) {
-   switch (baker_id % 6) {
-       case 0: return "\033[31m";  // Red
-       case 1: return "\033[32m";  // Green
-       case 2: return "\033[33m";  // Yellow
-       case 3: return "\033[34m";  // Blue
-       case 4: return "\033[35m";  // Magenta
-       case 5: return "\033[36m";  // Cyan
-       default: return "\033[37m"; // White
-   }
-}
-
 
 // Baker thread function
 void *baker(void *arg) {
-   int baker_id = *(int *)arg;
-   static int ramsied_baker = -1; // Holds the ID of the Ramsied baker
-   const char *color = get_baker_color(baker_id);  // Get color for this baker
+	puts("In baker thread!");
 
+	Baker baker = *(Baker*)arg;
+	char* color = baker.color;
+	int id = baker.bakerId ;
+	
+	// Loop through all five recipies
+	for (int i = 0; i < 5; i++) {
+		Recipe recipe = (baker.currentRecipe + i) % 5;
+		printf("%sBaker %d is starting recipe: %s\n", color, id, recipe_names[recipe]);
+		cook(&baker, recipe);
+		giveUp(&baker);
 
-   // Only one baker will be Ramsied
-   if (ramsied_baker == -1 && rand() % NUM_BAKERS == 0) {
-       ramsied_baker = baker_id;
-       printf("%sBaker %d has been Ramsied!\033[0m\n", color, baker_id); // Red color for Ramsied baker
-   }
+		baker.gotPantry = 0;
+		baker.gotRefrigerator = 0;
+		baker.gotMixed = 0;
+		baker.gotOven = 0;
 
+		printf("%sBaker %d has finished recipe: %s\n", color, id, recipe_names[recipe]);
+	}
 
-   // Step 1: Perform each recipe
-   for (int i = 0; i < 5; i++) { // Loop through each recipe
-       Recipe recipe = i;
-       printf("%sBaker %d is starting recipe: %s\033[0m\n", color, baker_id, recipe_names[recipe]);
-
-
-       // Acquire pantry ingredients (only one baker can be in the pantry at a time)
-       sem_wait(&pantry);
-
-
-       // Acquire ingredients for the current recipe
-       acquire_ingredients_for_recipe(recipe, baker_id);
-
-
-       // Access Mixing Resources: Bowl, Spoon, Mixer
-       sem_wait(&bowl);
-       sem_wait(&spoon);
-       sem_wait(&mixer);
-
-
-       // Mixing the ingredients
-       printf("%sBaker %d is mixing ingredients for %s\033[0m\n", color, baker_id, recipe_names[recipe]);
-
-
-       // Access Oven and bake
-       sem_wait(&oven);
-       printf("%sBaker %d is baking %s\033[0m\n", color, baker_id, recipe_names[recipe]);
-
-
-       // After completion of the recipe
-       printf("%sBaker %d has finished %s\033[0m\n", color, baker_id, recipe_names[recipe]);
-
-
-       // Release all resources and ingredients used for the recipe
-       sem_post(&oven);
-       sem_post(&mixer);
-       sem_post(&spoon);
-       sem_post(&bowl);
-
-
-       // Release the acquired ingredients
-       release_ingredients_for_recipe(recipe);
-
-
-       // Release pantry
-       sem_post(&pantry);
-
-
-       // If the baker was Ramsied, release all semaphores and restart the current recipe
-       if (baker_id == ramsied_baker) {
-           printf("%sBaker %d was Ramsied and is restarting recipe: %s\033[0m\n", color, baker_id, recipe_names[recipe]);
-           // Release all semaphores and restart the recipe
-           sem_post(&oven);
-           sem_post(&mixer);
-           sem_post(&spoon);
-           sem_post(&bowl);
-           release_ingredients_for_recipe(recipe);
-           sem_post(&pantry);
-           i--;  // Retry the same recipe
-       }
-   }
-
-
-   return NULL;
+	return NULL;
 }
 
 
 int main() {
-   // Prompt user for the number of bakers
-   printf("Enter the number of bakers: ");
-   scanf("%d", &NUM_BAKERS);
+	int numBakers;
 
+	// Prompt user for the number of bakers
+	printf("Enter the number of bakers: ");
+	scanf("%d", &numBakers);
 
-   // Initialize semaphores for resources
-   sem_init(&mixer, 0, 2);        // 2 mixers available
-   sem_init(&pantry, 0, 1);        // Only one baker can be in the pantry at a time
-   sem_init(&refrigerator[0], 0, 1); // 2 refrigerators, only 1 can be in each at a time
-   sem_init(&refrigerator[1], 0, 1);
-   sem_init(&bowl, 0, 3);          // 3 bowls available
-   sem_init(&spoon, 0, 5);         // 5 spoons available
-   sem_init(&oven, 0, 1);          // Only 1 oven available
+	// Seed random number generator for Ramsied selection
+	srand(time(NULL));
 
+	// Initialize Semaphores
+	int returns[15];
+	puts("Setting up semaphores...");
+	returns[0] = sem_init(&sem.mixer, 0, 2);
+	returns[1] = sem_init(&sem.pantry, 0, 1);
+	returns[2] = sem_init(&sem.refrigerator, 0, 2);
+	returns[3] = sem_init(&sem.bowl, 0, 3);
+	returns[4] = sem_init(&sem.spoon, 0, 5);
+	returns[5] = sem_init(&sem.oven, 0, 1);
+	returns[6] = sem_init(&sem.flour, 0, 1);
+	returns[7] = sem_init(&sem.sugar, 0, 1);
+	returns[8] = sem_init(&sem.yeast, 0, 1);
+	returns[9] = sem_init(&sem.bakingSoda, 0, 1);
+	returns[10] = sem_init(&sem.salt, 0, 1);
+	returns[11] = sem_init(&sem.cinnamon, 0, 1);
+	returns[12] = sem_init(&sem.eggs, 0, 2);
+	returns[13] = sem_init(&sem.milk, 0, 2);
+	returns[14] = sem_init(&sem.butter, 0, 2);
 
-   // Ingredients semaphores for pantry and fridge
-   sem_init(&flour, 0, 1);
-   sem_init(&sugar, 0, 1);
-   sem_init(&yeast, 0, 1);
-   sem_init(&baking_soda, 0, 1);
-   sem_init(&salt, 0, 1);
-   sem_init(&cinnamon, 0, 1);
-   sem_init(&egg, 0, 1);
-   sem_init(&milk, 0, 1);
-   sem_init(&butter, 0, 1);
+	// Check success for sem_init
+	for (int i = 0; i < 15; i++) {
+		if (returns[i] == -1) {
+			printf("Error initalizing semaphore: %s\n", strerror(errno));
+			return 1;
+		}
+	}
 
+	// Create our Bakers
+	puts("Creating bakers...");
+	Baker *bakers = (Baker*)malloc(numBakers * sizeof(Baker));
 
-   // Seed random number generator for Ramsied selection
-   srand(time(NULL));
+	// Create baker object
+	for (int i = 0; i < numBakers; i++) {
+		char* color = getBakerColor(); 
+		bakers[i] = (Baker){i, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, rand() % 5, color};
+	}
 
+	// Create our baker threads
+	pthread_t bakerThreads[numBakers];
 
-   // Create baker threads
-   pthread_t *bakers = malloc(NUM_BAKERS * sizeof(pthread_t));
-   int *baker_ids = malloc(NUM_BAKERS * sizeof(int));
+	// Create pthreads
+	puts("Initializing baker threads...");
+	for (int i = 0; i < numBakers; i++) {
+		if ((pthread_create(&bakerThreads[i], NULL, baker, (void *)&bakers[i])) == -1) {
+			printf("Failed to create pthread %d: %s\n", i, strerror(errno));
 
+			// Clean up the threads that have been spun up so far
+			for (int j = 0; j <= i; j++) pthread_cancel(bakerThreads[j]);
+			return 1;
+		}
+	}
 
-   for (int i = 0; i < NUM_BAKERS; i++) {
-       baker_ids[i] = i + 1;
-       pthread_create(&bakers[i], NULL, baker, (void *)&baker_ids[i]);
-   }
+	// Wait for all baker threads to finish
+	puts("Waiting for baker threads...");
+	for (int i = 0; i < numBakers; i++) pthread_join(bakerThreads[i], NULL);
 
+	// Destroy semaphores
+	returns[0] = sem_destroy(&sem.mixer);
+	returns[1] = sem_destroy(&sem.pantry);
+	returns[2] = sem_destroy(&sem.refrigerator);
+	returns[3] = sem_destroy(&sem.bowl);
+	returns[4] = sem_destroy(&sem.spoon);
+	returns[5] = sem_destroy(&sem.oven);
+	returns[6] = sem_destroy(&sem.flour);
+	returns[7] = sem_destroy(&sem.sugar);
+	returns[8] = sem_destroy(&sem.yeast);
+	returns[9] = sem_destroy(&sem.bakingSoda);
+	returns[10] = sem_destroy(&sem.salt);
+	returns[11] = sem_destroy(&sem.cinnamon);
+	returns[12] = sem_destroy(&sem.eggs);
+	returns[13] = sem_destroy(&sem.milk);
+	returns[14] = sem_destroy(&sem.butter);
 
-   // Wait for all baker threads to finish
-   for (int i = 0; i < NUM_BAKERS; i++) {
-       pthread_join(bakers[i], NULL);
-   }
+	// Check success for sem_destroy 
+	for (int i = 0; i < 15; i++) {
+		if (returns[i] == -1) {
+			printf("Error destroying semaphore %d: %s\n", i, strerror(errno)); 
+		}
+	}
 
+	// Free all the memory malloc'd
+	for (int i = 0; i < numBakers; i++) {
+		free(bakers[i].color);
+	}
+	free(bakers);
 
-   // Clean up
-   free(bakers);
-   free(baker_ids);
-
-
-   // Destroy semaphores
-   sem_destroy(&mixer);
-   sem_destroy(&pantry);
-   sem_destroy(&refrigerator[0]);
-   sem_destroy(&refrigerator[1]);
-   sem_destroy(&bowl);
-   sem_destroy(&spoon);
-   sem_destroy(&oven);
-   sem_destroy(&flour);
-   sem_destroy(&sugar);
-   sem_destroy(&yeast);
-   sem_destroy(&baking_soda);
-   sem_destroy(&salt);
-   sem_destroy(&cinnamon);
-   sem_destroy(&egg);
-   sem_destroy(&milk);
-   sem_destroy(&butter);
-
-
-   return 0;
+	return 0;
 }
-
-
-
-
