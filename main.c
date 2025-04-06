@@ -7,7 +7,7 @@
 #include <unistd.h>
 #include <time.h>
 
-#define MAX_WAIT_TIME 100
+#define MAX_WAIT_TIME 200
 
 // Recipe definitions
 typedef enum {
@@ -151,6 +151,7 @@ void acquireIngredients(
 	int needsRefrigerator
 ) {
 	int timer = 0;
+	int waitTime = MAX_WAIT_TIME;
 	int finished = 0;
 
 	// Game loop until recipe is finished
@@ -195,19 +196,23 @@ void acquireIngredients(
 					baker->hasCinnamon = 1;
 				}
 
+				/*printf("Baker %d: Current time: %d/%d\n", baker->bakerId, timer, waitTime);*/
+
 				// If we expand the max amount of trying time
-				if (timer > MAX_WAIT_TIME) {
+				if (timer > waitTime) {
 					printf("%sBaker %d is bailing out of the pantry.\n", baker->color, baker->bakerId);
 					giveUpPantry(baker);
-					timer = 0;
+					sem_post(&sem.pantry);
+					waitTime += MAX_WAIT_TIME;
 					break;
 				}
 			}
 
 			// If we did not expand max waiting time, i.e., we got everything, exit and release pantry 
-			if (timer <= MAX_WAIT_TIME) {
+			if (timer <= waitTime) {
 				printf("%sBaker %d has gotten everything needed from the pantry!\n", baker->color, baker->bakerId);
 				sem_post(&sem.pantry);
+				waitTime = MAX_WAIT_TIME;
 				baker->gotPantry = 1;
 			}
 		}
@@ -235,17 +240,21 @@ void acquireIngredients(
 					baker->hasButter = 1;
 				}
 
-				if (timer > MAX_WAIT_TIME) {
+				/*printf("Baker %d: Current time: %d/%d\n", baker->bakerId, timer, waitTime);*/
+
+				if (timer > waitTime) {
 					printf("%sBaker %d is bailing out of the refrigerator.\n", baker->color, baker->bakerId);
 					giveUpRefrigerator(baker);
-					timer = 0;
+					sem_post(&sem.refrigerator);
+					waitTime += MAX_WAIT_TIME;
 					break;
 				}
 			}
 
-			if (timer <= MAX_WAIT_TIME) {
+			if (timer <= waitTime) {
 				printf("%sBaker %d has gotten everything needed from the refrigerator!\n", baker->color, baker->bakerId);
 				sem_post(&sem.refrigerator);
+				waitTime = MAX_WAIT_TIME;
 				baker->gotRefrigerator = 1;
 			}
 		}
@@ -271,16 +280,19 @@ void acquireIngredients(
 					baker->gotMixer = 1;
 				}
 
-				if (timer > MAX_WAIT_TIME) {
+				/*printf("Baker %d: Current Time: %d/%d\n", baker->bakerId, timer, waitTime);*/
+
+				if (timer > waitTime) {
 					printf("%sBaker %d is bailing out on acquiring mixing requirments.\n", baker->color, baker->bakerId);
 					giveUpMixing(baker);
-					timer = 0;
+					waitTime += MAX_WAIT_TIME;
 					break;
 				}
 			}
 
-			if (timer <= MAX_WAIT_TIME) {
+			if (timer <= waitTime) {
 				printf("%sBaker %d has gotten all the mixing requirments!\n", baker->color, baker->bakerId);
+				waitTime = MAX_WAIT_TIME;
 				baker->gotMixed = 1;
 			}
 		}
@@ -305,6 +317,7 @@ void acquireIngredients(
 void cook(Baker* baker, Recipe recipe) {
 	switch(recipe) {
 		case COOKIES:
+			//flour, sugar, yeast, bakingSoda, salt, cinnamon, eggs, milk, butter, pantry, refrigerator
 			acquireIngredients(baker, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1);
 			break;
 		case PANCAKES:
@@ -324,8 +337,6 @@ void cook(Baker* baker, Recipe recipe) {
 
 // Baker thread function
 void *baker(void *arg) {
-	puts("In baker thread!");
-
 	Baker baker = *(Baker*)arg;
 	char* color = baker.color;
 	int id = baker.bakerId ;
@@ -345,6 +356,7 @@ void *baker(void *arg) {
 		printf("%sBaker %d has finished recipe: %s\n", color, id, recipe_names[recipe]);
 	}
 
+	printf("%sBaker %d is done!\n", color, id); 
 	return NULL;
 }
 
