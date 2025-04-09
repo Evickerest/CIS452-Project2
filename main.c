@@ -27,9 +27,12 @@ typedef struct Baker {
 	int hasBakingSoda;
 	int hasSalt;
 	int hasCinnamon;
-	int hasEggs;
-	int hasMilk;
-	int hasButter;
+	int hasEggs1;
+	int hasMilk1;
+	int hasButter1;
+	int hasEggs2;
+	int hasMilk2;
+	int hasButter2;
 	int gotBowl;
 	int gotSpoon;
 	int gotMixer;
@@ -46,7 +49,8 @@ typedef struct Baker {
 typedef struct Sem {
 	sem_t mixer;
 	sem_t pantry;
-	sem_t refrigerator;
+	sem_t refrigerator1;
+	sem_t refrigerator2;
 	sem_t bowl;
 	sem_t spoon;
 	sem_t oven;
@@ -151,7 +155,6 @@ void acquireIngredients(
 	int needsRefrigerator
 ) {
 	int timer = 0;
-	int waitTime = MAX_WAIT_TIME;
 	int finished = 0;
 
 	// Game loop until recipe is finished
@@ -199,20 +202,18 @@ void acquireIngredients(
 				/*printf("Baker %d: Current time: %d/%d\n", baker->bakerId, timer, waitTime);*/
 
 				// If we expand the max amount of trying time
-				if (timer > waitTime) {
+				if (timer > MAX_WAIT_TIME) {
 					printf("%sBaker %d is bailing out of the pantry.\n", baker->color, baker->bakerId);
 					giveUpPantry(baker);
 					sem_post(&sem.pantry);
-					waitTime += MAX_WAIT_TIME;
 					break;
 				}
 			}
 
 			// If we did not expand max waiting time, i.e., we got everything, exit and release pantry 
-			if (timer <= waitTime) {
-				printf("%sBaker %d has gotten everything needed from the pantry!\n", baker->color, baker->bakerId);
+			if (timer <= MAX_WAIT_TIME) {
+				printf("%sBaker %d has gotten everything needed from the pantry!\n", baker->color, baker->bakerId); 
 				sem_post(&sem.pantry);
-				waitTime = MAX_WAIT_TIME;
 				baker->gotPantry = 1;
 			}
 		}
@@ -242,19 +243,17 @@ void acquireIngredients(
 
 				/*printf("Baker %d: Current time: %d/%d\n", baker->bakerId, timer, waitTime);*/
 
-				if (timer > waitTime) {
+				if (timer > MAX_WAIT_TIME) {
 					printf("%sBaker %d is bailing out of the refrigerator.\n", baker->color, baker->bakerId);
 					giveUpRefrigerator(baker);
 					sem_post(&sem.refrigerator);
-					waitTime += MAX_WAIT_TIME;
 					break;
 				}
 			}
 
-			if (timer <= waitTime) {
+			if (timer <= MAX_WAIT_TIME) {
 				printf("%sBaker %d has gotten everything needed from the refrigerator!\n", baker->color, baker->bakerId);
 				sem_post(&sem.refrigerator);
-				waitTime = MAX_WAIT_TIME;
 				baker->gotRefrigerator = 1;
 			}
 		}
@@ -282,17 +281,15 @@ void acquireIngredients(
 
 				/*printf("Baker %d: Current Time: %d/%d\n", baker->bakerId, timer, waitTime);*/
 
-				if (timer > waitTime) {
+				if (timer > MAX_WAIT_TIME) {
 					printf("%sBaker %d is bailing out on acquiring mixing requirments.\n", baker->color, baker->bakerId);
 					giveUpMixing(baker);
-					waitTime += MAX_WAIT_TIME;
 					break;
 				}
 			}
 
-			if (timer <= waitTime) {
+			if (timer <= MAX_WAIT_TIME) {
 				printf("%sBaker %d has gotten all the mixing requirments!\n", baker->color, baker->bakerId);
-				waitTime = MAX_WAIT_TIME;
 				baker->gotMixed = 1;
 			}
 		}
@@ -372,23 +369,27 @@ int main() {
 	srand(time(NULL));
 
 	// Initialize Semaphores
-	int returns[15];
+	int returns[19];
 	puts("Setting up semaphores...");
 	returns[0] = sem_init(&sem.mixer, 0, 2);
 	returns[1] = sem_init(&sem.pantry, 0, 1);
-	returns[2] = sem_init(&sem.refrigerator, 0, 2);
-	returns[3] = sem_init(&sem.bowl, 0, 3);
-	returns[4] = sem_init(&sem.spoon, 0, 5);
-	returns[5] = sem_init(&sem.oven, 0, 1);
-	returns[6] = sem_init(&sem.flour, 0, 1);
-	returns[7] = sem_init(&sem.sugar, 0, 1);
-	returns[8] = sem_init(&sem.yeast, 0, 1);
-	returns[9] = sem_init(&sem.bakingSoda, 0, 1);
-	returns[10] = sem_init(&sem.salt, 0, 1);
-	returns[11] = sem_init(&sem.cinnamon, 0, 1);
-	returns[12] = sem_init(&sem.eggs, 0, 2);
-	returns[13] = sem_init(&sem.milk, 0, 2);
-	returns[14] = sem_init(&sem.butter, 0, 2);
+	returns[2] = sem_init(&sem.refrigerator1, 0, 1);
+	returns[3] = sem_init(&sem.refrigerator2, 0, 1);
+	returns[4] = sem_init(&sem.bowl, 0, 3);
+	returns[5] = sem_init(&sem.spoon, 0, 5);
+	returns[6] = sem_init(&sem.oven, 0, 1);
+	returns[7] = sem_init(&sem.flour, 0, 1);
+	returns[8] = sem_init(&sem.sugar, 0, 1);
+	returns[9] = sem_init(&sem.yeast, 0, 1);
+	returns[10] = sem_init(&sem.bakingSoda, 0, 1);
+	returns[11] = sem_init(&sem.salt, 0, 1);
+	returns[12] = sem_init(&sem.cinnamon, 0, 1);
+	returns[13] = sem_init(&sem.eggs1, 0, 1);
+	returns[14] = sem_init(&sem.milk1, 0, 1);
+	returns[15] = sem_init(&sem.butter1, 0, 1);
+	returns[16] = sem_init(&sem.eggs2, 0, 1);
+	returns[17] = sem_init(&sem.milk2, 0, 1);
+	returns[18] = sem_init(&sem.butter2, 0, 1);
 
 	// Check success for sem_init
 	for (int i = 0; i < 15; i++) {
@@ -430,19 +431,23 @@ int main() {
 	// Destroy semaphores
 	returns[0] = sem_destroy(&sem.mixer);
 	returns[1] = sem_destroy(&sem.pantry);
-	returns[2] = sem_destroy(&sem.refrigerator);
-	returns[3] = sem_destroy(&sem.bowl);
-	returns[4] = sem_destroy(&sem.spoon);
-	returns[5] = sem_destroy(&sem.oven);
-	returns[6] = sem_destroy(&sem.flour);
-	returns[7] = sem_destroy(&sem.sugar);
-	returns[8] = sem_destroy(&sem.yeast);
-	returns[9] = sem_destroy(&sem.bakingSoda);
-	returns[10] = sem_destroy(&sem.salt);
-	returns[11] = sem_destroy(&sem.cinnamon);
-	returns[12] = sem_destroy(&sem.eggs);
-	returns[13] = sem_destroy(&sem.milk);
-	returns[14] = sem_destroy(&sem.butter);
+	returns[2] = sem_destroy(&sem.refrigerator1);
+	returns[3] = sem_destroy(&sem.refrigerator2);
+	returns[4] = sem_destroy(&sem.bowl);
+	returns[5] = sem_destroy(&sem.spoon);
+	returns[6] = sem_destroy(&sem.oven);
+	returns[7] = sem_destroy(&sem.flour);
+	returns[8] = sem_destroy(&sem.sugar);
+	returns[9] = sem_destroy(&sem.yeast);
+	returns[10] = sem_destroy(&sem.bakingSoda);
+	returns[11] = sem_destroy(&sem.salt);
+	returns[12] = sem_destroy(&sem.cinnamon);
+	returns[13] = sem_destroy(&sem.eggs1);
+	returns[14] = sem_destroy(&sem.milk1);
+	returns[15] = sem_destroy(&sem.butter1);
+	returns[16] = sem_destroy(&sem.eggs2);
+	returns[17] = sem_destroy(&sem.milk2);
+	returns[18] = sem_destroy(&sem.butter2);
 
 	// Check success for sem_destroy 
 	for (int i = 0; i < 15; i++) {
