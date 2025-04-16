@@ -9,7 +9,8 @@
 
 #define MAX_WAIT_TIME 200
 
-int ramsied_id = 0
+int ramsied_id = 0;
+int has_remaised = 0;
 
 // Recipe definitions
 typedef enum {
@@ -303,8 +304,11 @@ void *baker(void *arg) {
 		printf("%sBaker %d is starting recipe: %s\n", color, id, recipe_names[recipe]);
 		cook(&baker, recipe);
 
-		if (ramsied_id == id && i == 3) {
+		// Ramsey baker on 4th recipe
+		if (ramsied_id == id && i == 3 && has_remaised == 0) {
     		i--;
+			has_remaised = 1;
+			printf("%sBaker %d has been ramsied!\n", color, id);
 			releaseIngredients(&baker);
     		continue;
 			
@@ -328,6 +332,7 @@ int main() {
 	scanf("%d", &numBakers);
 
 	// ramseid random event 
+	srand(time(NULL));
 	ramsied_id = rand() % numBakers;
 
 	// Initialize Semaphores
