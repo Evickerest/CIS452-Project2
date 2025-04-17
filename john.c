@@ -10,6 +10,7 @@
 #define MAX_WAIT_TIME 200
 
 int ramsied_id = 0;
+int ramsied_recipe = 0;
 int has_remaised = 0;
 
 // Recipe definitions
@@ -305,10 +306,10 @@ void *baker(void *arg) {
 		cook(&baker, recipe);
 
 		// Ramsey baker on 4th recipe
-		if (ramsied_id == id && i == 3 && has_remaised == 0) {
+		if (ramsied_id == id && i == ramsied_recipe && has_remaised == 0) {
     		i--;
 			has_remaised = 1;
-			printf("%sBaker %d has been ramsied!\n", color, id);
+			printf("%sBaker %d has been ramsied on recipe: %s!\n", color, id, recipe_names[recipe]);
 			releaseIngredients(&baker);
     		continue;
 			
@@ -334,6 +335,7 @@ int main() {
 	// ramseid random event 
 	srand(time(NULL));
 	ramsied_id = rand() % numBakers;
+	ramsied_recipe = rand() % 5;
 
 	// Initialize Semaphores
 	int returns[6];
